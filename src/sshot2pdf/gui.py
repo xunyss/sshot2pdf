@@ -147,7 +147,11 @@ class AppWindow:
         labels = [w["label"] for w in self._windows]
         self._combo["values"] = labels
         if labels:
-            self._combo.current(0)
+            default = next(
+                (i for i, w in enumerate(self._windows) if "Viewer" in w["label"]),
+                0,
+            )
+            self._combo.current(default)
         else:
             self._win_var.set("")
 
