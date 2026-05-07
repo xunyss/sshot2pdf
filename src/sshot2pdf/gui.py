@@ -107,19 +107,15 @@ class AppWindow:
         frm_crop.pack(fill="x", **pad)
         tk.Label(frm_crop, text="여백 처리:").pack(anchor="w")
 
-        frm_autocrop = tk.Frame(frm_crop)
-        frm_autocrop.pack(fill="x")
-        self._autocrop_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            frm_autocrop, text="검은 여백 자동 제거 (레터박스)", variable=self._autocrop_var
-        ).pack(side="left")
-
-        frm_top = tk.Frame(frm_crop)
-        frm_top.pack(fill="x", pady=(2, 0))
-        tk.Label(frm_top, text="상단 추가 제거:").pack(side="left")
-        self._top_px_var = tk.StringVar(value="0")
-        tk.Entry(frm_top, textvariable=self._top_px_var, width=6).pack(side="left", padx=4)
-        tk.Label(frm_top, text="px  (창 모드 타이틀바 제거용, Retina=56)").pack(side="left")
+        self._crop_mode_var = tk.StringVar(value="first")
+        for label, value in [
+            ("감지안함 (전체화면)", "none"),
+            ("첫 페이지 자동감지", "first"),
+            ("매 페이지 자동감지", "every"),
+        ]:
+            tk.Radiobutton(
+                frm_crop, text=label, variable=self._crop_mode_var, value=value
+            ).pack(anchor="w")
 
         # Separator
         ttk.Separator(self.root, orient="horizontal").pack(fill="x", padx=12, pady=6)
@@ -193,18 +189,10 @@ class AppWindow:
             messagebox.showerror("오류", "대기 시간은 0.1 이상의 숫자여야 합니다.")
             return
 
-        try:
-            top_px = int(self._top_px_var.get())
-            if top_px < 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("오류", "상단 제거 픽셀은 0 이상의 정수여야 합니다.")
-            return
-
         captures_dir = Path.cwd() / "temp"
         logger.info(
-            "start: win=%r key=%d delay=%.1f top_px=%d autocrop=%s temp=%s",
-            win["label"], self._key_var.get(), delay, top_px, self._autocrop_var.get(), captures_dir,
+            "start: win=%r key=%d delay=%.1f crop_mode=%s temp=%s",
+            win["label"], self._key_var.get(), delay, self._crop_mode_var.get(), captures_dir,
         )
         self._capturer = Capturer(
             window_id=win["id"],
@@ -214,8 +202,7 @@ class AppWindow:
             captures_dir=captures_dir,
             on_page_cb=self._on_page,
             on_done_cb=self._on_done,
-            top_px=top_px,
-            autocrop=self._autocrop_var.get(),
+            crop_mode=self._crop_mode_var.get(),
         )
 
         self._btn_start.config(state="disabled")

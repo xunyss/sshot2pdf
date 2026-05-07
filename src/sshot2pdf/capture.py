@@ -59,47 +59,70 @@ end tell
     subprocess.run(["osascript", "-e", script], check=True)
 
 
-def _autocrop_borders(img: Image.Image, black_threshold: int = 20, border_ratio: float = 0.95) -> Image.Image:
-    """Remove borders where >= border_ratio of pixels are near-black.
+def _find_content_bbox(
+    img: Image.Image,
+    dark_threshold: int = 25,
+    dark_ratio: float = 0.85,
+    min_ratio: float = 0.10,
+) -> tuple[int, int, int, int]:
+    """Find the bounding box of the main slide content.
 
-    Uses a ratio instead of any-pixel detection, so sparse UI elements
-    (e.g., a Toolbar strip at the right edge) don't prevent removal
-    of the surrounding black letterbox bars.
+    Classifies each row/column as 'dark background' or 'content', then selects
+    the LONGEST contiguous content run on each axis. This handles all cases
+    without case-by-case logic:
+      - Black letterbox / pillarbox bars → dark, removed
+      - Thin PDF viewer border lines     → very short content run, skipped
+      - macOS title bar (windowed mode)  → short content run, skipped
+      - Actual slide                     → longest content run, selected
+
+    Falls back to the full image when the detected area is too small.
     """
     gray = img.convert("L")
     w, h = img.size
     data = list(gray.getdata())
 
-    def col_is_border(x: int) -> bool:
-        black = sum(1 for y in range(h) if data[y * w + x] <= black_threshold)
-        return black / h >= border_ratio
+    # Count dark pixels per row and column in a single pass.
+    row_dark = [0] * h
+    col_dark = [0] * w
+    for y in range(h):
+        base = y * w
+        for x in range(w):
+            if data[base + x] <= dark_threshold:
+                row_dark[y] += 1
+                col_dark[x] += 1
 
-    def row_is_border(y: int) -> bool:
-        start = y * w
-        black = sum(1 for p in data[start : start + w] if p <= black_threshold)
-        return black / w >= border_ratio
+    row_is_dark = [row_dark[y] / w >= dark_ratio for y in range(h)]
+    col_is_dark = [col_dark[x] / h >= dark_ratio for x in range(w)]
 
-    left = 0
-    while left < w and col_is_border(left):
-        left += 1
+    def longest_run(is_dark: list[bool]) -> tuple[int, int]:
+        best = (0, len(is_dark))
+        best_len = 0
+        run_start: int | None = None
+        for i, dark in enumerate(is_dark):
+            if not dark:
+                if run_start is None:
+                    run_start = i
+            else:
+                if run_start is not None:
+                    run_len = i - run_start
+                    if run_len > best_len:
+                        best_len, best = run_len, (run_start, i)
+                    run_start = None
+        if run_start is not None:
+            run_len = len(is_dark) - run_start
+            if run_len > best_len:
+                best = (run_start, len(is_dark))
+        return best
 
-    right = w
-    while right > left and col_is_border(right - 1):
-        right -= 1
+    top, bottom = longest_run(row_is_dark)
+    left, right = longest_run(col_is_dark)
 
-    top = 0
-    while top < h and row_is_border(top):
-        top += 1
+    if (right - left) < w * min_ratio or (bottom - top) < h * min_ratio:
+        logger.debug("find_content_bbox: %dx%d → result too small, keeping full image", w, h)
+        return (0, 0, w, h)
 
-    bottom = h
-    while bottom > top and row_is_border(bottom - 1):
-        bottom -= 1
-
-    if (right - left) < w * 0.10 or (bottom - top) < h * 0.10:
-        logger.debug("autocrop: %dx%d → skipped (result too small: %dx%d)", w, h, right - left, bottom - top)
-        return img
-    logger.debug("autocrop: %dx%d → %dx%d", w, h, right - left, bottom - top)
-    return img.crop((left, top, right, bottom))
+    logger.debug("find_content_bbox: %dx%d → (%d,%d,%d,%d)", w, h, left, top, right, bottom)
+    return (left, top, right, bottom)
 
 
 def _is_mostly_black(img: Image.Image, threshold: float = 0.90, black_val: int = 20) -> bool:
@@ -120,13 +143,12 @@ def _is_mostly_black(img: Image.Image, threshold: float = 0.90, black_val: int =
     return result
 
 
-def crop_image(img: Image.Image, top_px: int = 0, autocrop: bool = True) -> Image.Image:
-    """Crop title-bar pixels from top, then remove near-black borders on all sides."""
-    if top_px > 0:
-        img = img.crop((0, top_px, img.width, img.height))
-    if autocrop:
-        img = _autocrop_borders(img)
-    return img
+def crop_image(img: Image.Image) -> Image.Image:
+    """Crop to the main slide content area, removing all surrounding chrome."""
+    left, top, right, bottom = _find_content_bbox(img)
+    if (left, top, right, bottom) == (0, 0, img.width, img.height):
+        return img
+    return img.crop((left, top, right, bottom))
 
 
 def is_same_page(img_a: Path, img_b: Path, threshold: float = 0.99) -> bool:
@@ -154,6 +176,7 @@ def build_pdf(captures_dir: Path) -> Path:
     return out
 
 
+
 class Capturer(threading.Thread):
     def __init__(
         self,
@@ -164,8 +187,7 @@ class Capturer(threading.Thread):
         captures_dir: Path,
         on_page_cb: Callable[[int], None],
         on_done_cb: Callable[[Path | None, Exception | None], None],
-        top_px: int = 0,
-        autocrop: bool = True,
+        crop_mode: str = "first",
     ) -> None:
         super().__init__(daemon=True)
         self.window_id = window_id
@@ -175,8 +197,7 @@ class Capturer(threading.Thread):
         self.captures_dir = captures_dir
         self.on_page_cb = on_page_cb
         self.on_done_cb = on_done_cb
-        self.top_px = top_px
-        self.autocrop = autocrop
+        self.crop_mode = crop_mode  # "none" | "first" | "every"
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -188,9 +209,11 @@ class Capturer(threading.Thread):
         page = 1
 
         logger.info(
-            "capturer start: wid=%d owner=%r key=%d delay=%.1fs top_px=%d autocrop=%s",
-            self.window_id, self.owner, self.key_code, self.delay, self.top_px, self.autocrop,
+            "capturer start: wid=%d owner=%r key=%d delay=%.1fs crop_mode=%s",
+            self.window_id, self.owner, self.key_code, self.delay, self.crop_mode,
         )
+
+        cached_bbox: tuple[int, int, int, int] | None = None
 
         try:
             while not self._stop.is_set():
@@ -198,15 +221,25 @@ class Capturer(threading.Thread):
                 take_screenshot(self.window_id, path)
 
                 img = Image.open(path)
-                if self.top_px > 0 or self.autocrop:
-                    img = crop_image(img, top_px=self.top_px, autocrop=self.autocrop)
-                    img.save(path)
 
-                # End-of-slideshow: "슬라이드 쇼가 끝났습니다" is almost entirely black
+                # End-of-slideshow check on raw image before cropping.
                 if _is_mostly_black(img):
                     logger.info("end-of-slideshow detected at page %d, stopping", page)
                     path.unlink(missing_ok=True)
                     break
+
+                if self.crop_mode != "none":
+                    if cached_bbox is None or self.crop_mode == "every":
+                        bbox = _find_content_bbox(img)
+                        if self.crop_mode == "first" and cached_bbox is None:
+                            cached_bbox = bbox
+                            logger.info("content bbox cached from page %d: %s", page, bbox)
+                    else:
+                        bbox = cached_bbox
+                    left, top, right, bottom = bbox
+                    if (left, top, right, bottom) != (0, 0, img.width, img.height):
+                        img = img.crop((left, top, right, bottom))
+                        img.save(path)
 
                 if prev is not None and is_same_page(prev, path):
                     logger.info("duplicate page detected at page %d, stopping", page)
