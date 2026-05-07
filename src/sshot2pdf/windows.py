@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 
 import Quartz
+# noinspection PyUnresolvedReferences
 from AppKit import NSApplicationActivationPolicyRegular, NSRunningApplication
 
 logger = logging.getLogger(__name__)
+
 
 # Belt-and-suspenders: system processes that may pass the activation-policy check
 # but have no meaningful user-facing window.

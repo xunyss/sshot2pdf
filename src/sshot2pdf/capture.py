@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 import threading
 import time
@@ -7,11 +8,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-import logging
-
 import Quartz
-from Foundation import NSURL
 import img2pdf
+# noinspection PyUnresolvedReferences
+from Foundation import NSURL
 from PIL import Image, ImageChops
 
 logger = logging.getLogger(__name__)

@@ -6,12 +6,12 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-logger = logging.getLogger(__name__)
-
 import Quartz
 
 from sshot2pdf.capture import Capturer
 from sshot2pdf.windows import list_windows
+
+logger = logging.getLogger(__name__)
 
 KEY_PAGE_DOWN = 121
 KEY_DOWN_ARROW = 125
