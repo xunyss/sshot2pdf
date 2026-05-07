@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import queue
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -25,9 +26,11 @@ class AppWindow:
 
         self._windows: list[dict] = []
         self._capturer: Capturer | None = None
+        self._cb_queue: queue.SimpleQueue = queue.SimpleQueue()
 
         self._build_ui()
         self._refresh_windows()
+        self._drain_queue()
 
     # ── macOS identity ───────────────────────────────────────────────────
 
@@ -136,9 +139,12 @@ class AppWindow:
         )
         self._btn_start.pack(side="left", padx=6)
         self._btn_stop = tk.Button(
-            frm_btn, text="  종료  ", width=10, command=self._on_stop, state="disabled"
+            frm_btn, text="  중지  ", width=10, command=self._on_stop, state="disabled"
         )
         self._btn_stop.pack(side="left", padx=6)
+        tk.Button(frm_btn, text="  종료  ", width=10, command=self.root.destroy).pack(
+            side="left", padx=6
+        )
 
     # ── Window list ──────────────────────────────────────────────────────
 
@@ -222,10 +228,20 @@ class AppWindow:
         self._btn_stop.config(state="disabled")
         self._status_var.set("상태: 중지 중…")
 
+    # ── Queue drain (main-thread poller) ─────────────────────────────────
+
+    def _drain_queue(self) -> None:
+        try:
+            while True:
+                self._cb_queue.get_nowait()()
+        except queue.Empty:
+            pass
+        self.root.after(100, self._drain_queue)
+
     # ── Callbacks from Capturer thread ───────────────────────────────────
 
     def _on_page(self, page: int) -> None:
-        self.root.after(0, lambda: self._pages_var.set(f"캡처: {page} 페이지"))
+        self._cb_queue.put(lambda: self._pages_var.set(f"캡처: {page} 페이지"))
 
     def _on_done(self, pdf_path: Path | None, error: Exception | None) -> None:
         logger.info("on_done: pdf=%s error=%s", pdf_path, error)
@@ -242,7 +258,7 @@ class AppWindow:
             else:
                 self._status_var.set("상태: 대기 중")
 
-        self.root.after(0, _update)
+        self._cb_queue.put(_update)
 
     # ── Main loop ────────────────────────────────────────────────────────
 
