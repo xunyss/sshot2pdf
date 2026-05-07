@@ -22,4 +22,5 @@ packages = ["src/sshot2pdf"]
 [dependency-groups]
 dev = [
     "hatchling>=1.29.0",
+    "pypdf>=6.10.2",
 ]

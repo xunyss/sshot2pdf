@@ -166,13 +166,30 @@ def is_same_page(img_a: Path, img_b: Path, threshold: float = 0.99) -> bool:
     return result
 
 
+def _make_max_width_layout(max_width_mm: float = 297.0):
+    """페이지 가로가 max_width_mm 초과 시 비율 유지로 축소, 이하면 그대로."""
+    max_width_pt = img2pdf.mm_to_pt(max_width_mm)
+
+    def layout_fun(imgwidth, imgheight, ndpi):
+        xdpi, ydpi = ndpi if ndpi else (72, 72)
+        w_pt = imgwidth / xdpi * 72
+        h_pt = imgheight / ydpi * 72
+        if w_pt > max_width_pt:
+            scale = max_width_pt / w_pt
+            w_pt = max_width_pt
+            h_pt *= scale
+        return (w_pt, h_pt, w_pt, h_pt)
+
+    return layout_fun
+
+
 def build_pdf(captures_dir: Path) -> Path:
     images = sorted(captures_dir.glob("page_*.png"))
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out = captures_dir.parent / f"output_{ts}.pdf"
     logger.info("build_pdf: %d pages → %s", len(images), out.name)
     with open(out, "wb") as f:
-        f.write(img2pdf.convert([str(p) for p in images]))
+        f.write(img2pdf.convert([str(p) for p in images], layout_fun=_make_max_width_layout()))
     return out
 
 
